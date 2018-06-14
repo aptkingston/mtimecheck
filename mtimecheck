@@ -1,0 +1,126 @@
+#!/bin/bash
+
+#########################################
+#
+# This script checks if a directory is as
+# up-to-date as its most recently
+# modified children.
+#
+# This can be used to ensure the local
+# file system is aware of changes on
+# mounted network shares which would
+# otherwise go unoticed.
+#
+#########################################
+
+OUTPUT_FILE=
+VERBOSE="NO"
+DIRECTORY_SPECIFIED="FALSE"
+INCLUDE_FILES="FALSE"
+
+# Logs a statement
+log() {
+	if [ -z $OUTPUT_FILE ]; then
+    	echo "${1}"
+    else
+    	echo "$(date): ${1}" >> $OUTPUT_FILE
+	fi
+}
+
+# Creates then deletes a temporary file to update modtime
+update() {
+	echo "tmp" > "${1}/mtimecheck.ignore"
+	rm "${1}/mtimecheck.ignore"
+}
+
+# Searches a directory recursively for its most up to date item
+# Then updates the parent directory if required
+process() {
+	LATEST_DIR=""
+	LATEST_TIME=0
+	DIRECTORY_MODTIME=$(stat -c %Y ${1})
+
+	FIND_ARGS=()
+	FIND_ARGS+=($1)
+	FIND_ARGS+=("-mindepth" "1")
+	if [ $INCLUDE_FILES = "FALSE" ]; then
+		FIND_ARGS+=("-type" "d")
+	fi
+
+	while read DIR; do
+		if [ $VERBOSE = "YES" ]; then
+			log "    Checking ${DIR}..."
+		fi
+		MODTIME=$(stat "${DIR}" -c %Y)
+		if (( MODTIME > LATEST_TIME )); then
+			LATEST_TIME=$MODTIME
+			LATEST_DIR=$DIR
+		fi
+	done < <(find "${FIND_ARGS[@]}")
+
+	if (( LATEST_TIME > DIRECTORY_MODTIME )); then
+		log "${1} is not up to date with ${LATEST_DIR}"
+		update $1
+		log "Updated mtime of ${1}"
+	else
+		log "${1} is already up to date"
+	fi
+}
+
+# Process args
+while [[ $# -gt 0 ]]
+do
+key="$1"
+
+case $key in
+    -v|--verbose)
+    VERBOSE=YES
+    shift
+    ;;
+
+    -o|--output-file)
+    OUTPUT_FILE="$2"
+    shift
+    shift
+    ;;
+
+    -f|--include-files)
+	INCLUDE_FILES="TRUE"
+	shift
+	;;
+
+	-h|--help)
+	echo
+	echo "mtimecheck is a simple utility which ensures network file system changes are seen on the local file system."
+	echo "Every specified directory is resursively checked for its most recently modified child."
+	echo "If that child is newer than the parent directory, a local filesystem operation is performed to update the directory's modtime."
+	echo
+	echo "Usage:"
+	echo "    mtimecheck [ flags ] directory1 directory2 ... directoryX"
+	echo
+	echo "Flags:"
+	echo "    -f, --include-files    Include files when checking all children in a directory. Default is only subdirectories."
+	echo "    -o, --output-file      Log all output to a specific file rather than the console."
+	echo "    -v, --verbose          Include additional log statements."
+	echo
+	exit 0
+	;;
+
+    *) # other parameter, assume directory to scan
+	DIRECTORY_SPECIFIED="TRUE"
+	log "Checking ${1}..."
+    if [ ! -d "${1}" ]; then
+		log "${1} does not exist"
+	else
+		REALPATH="$(cd "${1}"; pwd)"
+		process "${REALPATH}"
+	fi
+    shift
+    ;;
+esac
+done
+
+# Helpul error if no files were specified
+if [ $DIRECTORY_SPECIFIED = "FALSE" ]; then
+	log "Please specify at least one directory"
+fi
